@@ -14,16 +14,20 @@ import {
   cancelWaitlist,
   checkInIron,
   checkOutIron,
+  deleteAllHistoryRecords,
   deleteHistoryRecord,
   forceCancelWaitlist,
   forceResetIron,
+  getAdminPins,
   getDashboardData,
   joinWaitlist,
   reportBrokenIron,
   resolveBrokenIron,
+  type AdminPinsResult,
   type DashboardData,
 } from "@/lib/ironService";
-import { parseRoomMeta } from "@/lib/roomMeta";
+import { parseRoomMeta, stripRoomMeta } from "@/lib/roomMeta";
+import { saveMyPin } from "@/lib/pinStorage";
 
 export default function Home() {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -34,6 +38,7 @@ export default function Home() {
     id: string;
     name: string;
     pin: string;
+    context: "borrow" | "waitlist";
   } | null>(null);
   const [modalMode, setModalMode] = useState<ActionModalMode | null>(null);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
@@ -41,6 +46,11 @@ export default function Home() {
   const [isReportingBroken, setIsReportingBroken] = useState(false);
   const [isAdminAuthOpen, setIsAdminAuthOpen] = useState(false);
   const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false);
+  const [adminPin, setAdminPin] = useState<string | null>(null);
+  const [adminPins, setAdminPins] = useState<AdminPinsResult>({
+    activePin: null,
+    waitlistPins: {},
+  });
 
   const showToast = useCallback((message: string) => {
     setToastMessage(message);
@@ -69,11 +79,14 @@ export default function Home() {
       const result = await getDashboardData();
       setErrorMessage(null);
       setData(result);
-      // Bersihkan banner PIN jika antrean tersebut sudah tidak ada di daftar tunggu
+      // Bersihkan banner PIN jika antrean/peminjaman tersebut sudah tidak aktif
       setGeneratedPinInfo((prev) => {
         if (!prev) return null;
         const stillWaiting = result.waitlist.some((w) => w.id === prev.id);
-        return stillWaiting ? prev : null;
+        const stillBorrowing =
+          !result.ironStatus.is_available &&
+          result.ironStatus.active_history_id === prev.id;
+        return stillWaiting || stillBorrowing ? prev : null;
       });
     } catch (err) {
       setErrorMessage(
@@ -91,47 +104,34 @@ export default function Home() {
       void loadDashboard();
     }, 0);
 
+    const channelName = `realtime-iron-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const channel = supabase
-      .channel("custom-all-channel")
+      .channel(channelName)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "iron_status" },
+        { event: "*", schema: "public", table: "iron_status" },
         () => {
           void loadDashboard();
         }
       )
       .on(
         "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "iron_status" },
-        () => {
-          void loadDashboard();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "borrow_history" },
-        () => {
-          void loadDashboard();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "borrow_history" },
-        () => {
-          void loadDashboard();
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "DELETE", schema: "public", table: "borrow_history" },
+        { event: "*", schema: "public", table: "borrow_history" },
         () => {
           void loadDashboard();
         }
       )
       .subscribe();
 
+    const syncInterval = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadDashboard();
+      }
+    }, 4000);
+
     return () => {
       window.clearTimeout(initTimer);
+      window.clearInterval(syncInterval);
       void supabase.removeChannel(channel);
     };
   }, [loadDashboard]);
@@ -143,29 +143,63 @@ export default function Home() {
   ) {
     if (modalMode === "waitlist") {
       const { id, pin } = await joinWaitlist(borrowerName, roomNumber);
-      setGeneratedPinInfo({ id, name: borrowerName, pin });
-      showToast(`Simpan PIN ini untuk batal antre: ${pin}`);
+      await loadDashboard();
+      saveMyPin({
+        id: String(id),
+        type: "queue",
+        pin,
+        room: stripRoomMeta(roomNumber),
+      });
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("activeIronPin", pin);
+      }
+      setGeneratedPinInfo({ id, name: borrowerName, pin, context: "waitlist" });
+      showToast(`Simpan PIN ini untuk batal antre / kembalikan: ${pin}`);
     } else {
-      await checkInIron(borrowerName, roomNumber, durationMinutes);
-      setGeneratedPinInfo(null);
-      showToast(`Selamat menyetrika, ${borrowerName} (Kamar ${roomNumber})!`);
+      const { id, pin } = await checkInIron(
+        borrowerName,
+        roomNumber,
+        durationMinutes
+      );
+      await loadDashboard();
+      saveMyPin({
+        id: String(id),
+        type: "borrow",
+        pin,
+        room: stripRoomMeta(roomNumber),
+      });
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("activeIronPin", pin);
+      }
+      setGeneratedPinInfo({ id, name: borrowerName, pin, context: "borrow" });
+      showToast(
+        `Selamat menyetrika, ${borrowerName}! Simpan PIN kembalikan: ${pin}`
+      );
     }
-    await loadDashboard();
   }
 
   async function handleCancelWaitlist(historyId: string, inputPin: string) {
     await cancelWaitlist(historyId, inputPin);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("activeIronPin");
+    }
     setGeneratedPinInfo(null);
     showToast("Antrean berhasil dibatalkan!");
     await loadDashboard();
   }
 
-  async function handleCheckOut() {
+  async function handleCheckOut(inputPin: string) {
     if (!data) return;
     setIsCheckingOut(true);
     setErrorMessage(null);
     try {
-      const result = await checkOutIron(data.ironStatus.active_history_id);
+      const result = await checkOutIron(
+        data.ironStatus.active_history_id,
+        inputPin
+      );
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("activeIronPin");
+      }
       setGeneratedPinInfo(null);
       if (result.promotedBorrower) {
         const { displayRoom } = parseRoomMeta(
@@ -179,9 +213,9 @@ export default function Home() {
       }
       await loadDashboard();
     } catch (err) {
-      setErrorMessage(
-        err instanceof Error ? err.message : "Gagal mengembalikan setrika."
-      );
+      throw err instanceof Error
+        ? err
+        : new Error("PIN salah, hanya peminjam yang bisa mengembalikan.");
     } finally {
       setIsCheckingOut(false);
     }
@@ -235,31 +269,66 @@ export default function Home() {
     }
   }
 
+  const refreshAdminPins = useCallback(async (pin: string) => {
+    try {
+      const pins = await getAdminPins(pin);
+      setAdminPins(pins);
+    } catch {
+      // Abaikan jika gagal memuat PIN admin; tombol aksi lain tetap tersedia
+    }
+  }, []);
+
   async function handleForceCancelWaitlist(historyId: string) {
-    await forceCancelWaitlist(historyId);
+    if (!adminPin) throw new Error("Sesi admin tidak valid.");
+    await forceCancelWaitlist(historyId, adminPin);
     setGeneratedPinInfo((prev) => (prev?.id === historyId ? null : prev));
     showToast("Antrean berhasil dibatalkan paksa oleh Admin.");
     await loadDashboard();
+    await refreshAdminPins(adminPin);
   }
 
   async function handleForceResetIron() {
-    await forceResetIron(data?.ironStatus.active_history_id);
+    if (!adminPin) throw new Error("Sesi admin tidak valid.");
+    await forceResetIron(adminPin, data?.ironStatus.active_history_id);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("activeIronPin");
+    }
     setGeneratedPinInfo(null);
     showToast("Status setrika berhasil di-reset ke Tersedia (-).");
     await loadDashboard();
+    await refreshAdminPins(adminPin);
   }
 
   async function handleDeleteHistory(historyId: string) {
-    await deleteHistoryRecord(historyId);
+    if (!adminPin) throw new Error("Sesi admin tidak valid.");
+    await deleteHistoryRecord(historyId, adminPin);
     showToast("Data riwayat berhasil dihapus permanen.");
     await loadDashboard();
   }
 
+  async function handleDeleteAllHistory() {
+    if (!adminPin) throw new Error("Sesi admin tidak valid.");
+    await deleteAllHistoryRecords(adminPin);
+    showToast("Seluruh data riwayat berhasil dihapus permanen.");
+    await loadDashboard();
+  }
+
   const lastReturnedAt = data?.history[0]?.returned_at ?? null;
+  const activeIds = data
+    ? [
+        ...(!data.ironStatus.is_available && data.ironStatus.active_history_id
+          ? [String(data.ironStatus.active_history_id)]
+          : []),
+        ...data.waitlist.map((w) => String(w.id)),
+      ]
+    : null;
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 text-slate-800">
-      <HeaderCard onSecretTrigger={() => setIsAdminAuthOpen(true)} />
+      <HeaderCard
+        onSecretTrigger={() => setIsAdminAuthOpen(true)}
+        activeIds={activeIds}
+      />
 
       {toastMessage && (
         <div
@@ -295,10 +364,14 @@ export default function Home() {
             </span>
             <div>
               <p className="text-xs font-bold text-amber-800">
-                Antrean {generatedPinInfo.name} terdaftar!
+                {generatedPinInfo.context === "borrow"
+                  ? `Peminjaman ${generatedPinInfo.name} aktif!`
+                  : `Antrean ${generatedPinInfo.name} terdaftar!`}
               </p>
               <p className="text-sm font-extrabold">
-                Simpan PIN ini untuk batal antre:{" "}
+                {generatedPinInfo.context === "borrow"
+                  ? "Simpan PIN ini untuk kembalikan setrika: "
+                  : "Simpan PIN ini untuk batal antre / kembalikan: "}
                 <span className="rounded-lg bg-amber-200 px-2 py-0.5 tracking-wider">
                   {generatedPinInfo.pin}
                 </span>
@@ -337,19 +410,19 @@ export default function Home() {
 
       {isLoading || !data ? (
         <div
-          className="flex flex-col gap-6 md:grid md:grid-cols-12 md:items-start lg:gap-8"
+          className="grid w-full grid-cols-1 gap-6 md:grid-cols-2 md:items-start lg:grid-cols-12 lg:gap-8"
           aria-busy="true"
           aria-label="Memuat data"
         >
-          <div className="h-96 animate-pulse rounded-3xl bg-white shadow-sm md:col-span-5" />
-          <div className="flex flex-col gap-6 md:col-span-7">
-            <div className="h-44 animate-pulse rounded-3xl bg-white shadow-sm" />
-            <div className="h-64 animate-pulse rounded-3xl bg-white shadow-sm" />
+          <div className="h-96 w-full animate-pulse rounded-3xl bg-white shadow-sm md:col-span-1 lg:col-span-5" />
+          <div className="flex w-full flex-col gap-6 md:col-span-1 lg:col-span-7">
+            <div className="h-44 w-full animate-pulse rounded-3xl bg-white shadow-sm" />
+            <div className="h-64 w-full animate-pulse rounded-3xl bg-white shadow-sm" />
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-6 md:grid md:grid-cols-12 md:items-start lg:gap-8">
-          <div className="flex flex-col gap-4 md:col-span-5 md:sticky md:top-6">
+        <div className="grid w-full grid-cols-1 gap-6 md:grid-cols-2 md:items-start lg:grid-cols-12 lg:gap-8">
+          <div className="flex min-w-0 w-full flex-col gap-4 md:col-span-1 lg:col-span-5 lg:sticky lg:top-6">
             <IronStatusCard
               status={data.ironStatus}
               lastReturnedAt={lastReturnedAt}
@@ -378,7 +451,7 @@ export default function Home() {
             )}
           </div>
 
-          <div className="flex flex-col gap-6 md:col-span-7">
+          <div className="flex min-w-0 w-full flex-col gap-6 md:col-span-1 lg:col-span-7">
             <WaitlistCard
               waitlist={data.waitlist}
               onCancelWaitlist={handleCancelWaitlist}
@@ -398,9 +471,11 @@ export default function Home() {
       <AdminAuthModal
         isOpen={isAdminAuthOpen}
         onClose={() => setIsAdminAuthOpen(false)}
-        onSuccess={() => {
+        onSuccess={(verifiedPin) => {
+          setAdminPin(verifiedPin);
           setIsAdminAuthOpen(false);
           setIsAdminDashboardOpen(true);
+          void refreshAdminPins(verifiedPin);
         }}
       />
 
@@ -410,10 +485,17 @@ export default function Home() {
           ironStatus={data.ironStatus}
           waitlist={data.waitlist}
           history={data.history}
-          onClose={() => setIsAdminDashboardOpen(false)}
+          activePin={adminPins.activePin}
+          waitlistPins={adminPins.waitlistPins}
+          onClose={() => {
+            setIsAdminDashboardOpen(false);
+            setAdminPin(null);
+            setAdminPins({ activePin: null, waitlistPins: {} });
+          }}
           onForceCancelWaitlist={handleForceCancelWaitlist}
           onForceResetIron={handleForceResetIron}
           onDeleteHistory={handleDeleteHistory}
+          onDeleteAllHistory={handleDeleteAllHistory}
         />
       )}
     </main>

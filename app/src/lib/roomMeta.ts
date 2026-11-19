@@ -15,9 +15,13 @@ export function formatRoomWithPin(room: string, pin: string): string {
 
 export function formatRoomWithDuration(
   room: string,
-  durationMinutes: number
+  durationMinutes: number,
+  pin?: string | null
 ): string {
   const clean = stripRoomMeta(room);
+  if (pin) {
+    return `${clean} (PIN: ${pin}) [${durationMinutes}m]`;
+  }
   return `${clean} [${durationMinutes}m]`;
 }
 

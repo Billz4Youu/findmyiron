@@ -7,6 +7,12 @@ import {
   formatRoomWithDuration,
   parseRoomMeta,
 } from "./roomMeta.ts";
+import {
+  saveMyPin,
+  getMyPin,
+  clearMyPin,
+  parseSavedPin,
+} from "./pinStorage.ts";
 
 test("dayLabel", () => {
   assert.equal(dayLabel("2026-11-15", "2026-11-15"), "Hari Ini");
@@ -55,4 +61,37 @@ test("parseRoomMeta memisahkan nomor kamar, PIN, dan durasi", () => {
     pin: null,
     durationMinutes: 15,
   });
+
+  const withDurAndPin = formatRoomWithDuration("2.27", 15, "4821");
+  assert.equal(withDurAndPin, "2.27 (PIN: 4821) [15m]");
+  assert.deepEqual(parseRoomMeta(withDurAndPin), {
+    displayRoom: "2.27",
+    pin: "4821",
+    durationMinutes: 15,
+  });
+});
+
+test("pinStorage menyimpan, membaca, memvalidasi, dan menghapus PIN", () => {
+  const store = new Map<string, string>();
+  const mockStorage = {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      store.set(k, v);
+    },
+    removeItem: (k: string) => {
+      store.delete(k);
+    },
+  };
+
+  assert.equal(getMyPin(mockStorage), null);
+
+  const rec = { id: "hist-1", type: "borrow" as const, pin: "4821", room: "2.19" };
+  saveMyPin(rec, mockStorage);
+  assert.deepEqual(getMyPin(mockStorage), rec);
+
+  clearMyPin(mockStorage);
+  assert.equal(getMyPin(mockStorage), null);
+
+  assert.equal(parseSavedPin("bukan-json"), null);
+  assert.equal(parseSavedPin(JSON.stringify({ id: "1", type: "invalid", pin: "1234", room: "2.1" })), null);
 });

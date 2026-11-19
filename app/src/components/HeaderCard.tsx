@@ -2,12 +2,17 @@
 
 import { useRef } from "react";
 import IronMascot from "./IronMascot";
+import MyPinButton from "./MyPinButton";
 
 interface HeaderCardProps {
   onSecretTrigger?: () => void;
+  activeIds?: string[] | null;
 }
 
-export default function HeaderCard({ onSecretTrigger }: HeaderCardProps) {
+export default function HeaderCard({
+  onSecretTrigger,
+  activeIds,
+}: HeaderCardProps) {
   const tapCountRef = useRef(0);
   const resetTimerRef = useRef<number | null>(null);
 
@@ -65,12 +70,15 @@ export default function HeaderCard({ onSecretTrigger }: HeaderCardProps) {
           <p className="text-xs font-semibold text-[#7A6A96]">
             Hai, sobat lorong 2B!
           </p>
-          <h1
-            onClick={handleTitleClick}
-            className="mt-0.5 cursor-pointer select-none text-2xl font-extrabold leading-tight tracking-tight text-slate-900 sm:text-3xl"
-          >
-            Find My Iron
-          </h1>
+          <div className="mt-0.5 flex items-center gap-2.5">
+            <h1
+              onClick={handleTitleClick}
+              className="cursor-pointer select-none text-2xl font-extrabold leading-tight tracking-tight text-slate-900 sm:text-3xl"
+            >
+              Find My Iron
+            </h1>
+            {activeIds && <MyPinButton activeIds={activeIds} />}
+          </div>
         </div>
 
         <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-white bg-[#FFE5A3] p-1.5 shadow-xs transition-transform duration-200 hover:scale-105">

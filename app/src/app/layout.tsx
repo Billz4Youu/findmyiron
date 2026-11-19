@@ -26,9 +26,9 @@ export default function RootLayout({
   return (
     <html
       lang="id"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} min-h-screen antialiased`}
     >
-      <body className="min-h-screen bg-gradient-to-br from-[#D6D3FF] via-[#E5E8FF] to-[#CBE7FF] text-slate-800">
+      <body className="min-h-screen w-full overflow-x-hidden bg-gradient-to-br from-[#D6D3FF] via-[#E5E8FF] to-[#CBE7FF] text-slate-800">
         <div className="mx-auto min-h-screen w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
           {children}
         </div>

@@ -20,10 +20,13 @@ interface AdminDashboardModalProps {
   ironStatus: IronStatus;
   waitlist: BorrowHistory[];
   history: BorrowHistory[];
+  activePin?: string | null;
+  waitlistPins?: Record<string, string>;
   onClose: () => void;
   onForceCancelWaitlist: (historyId: string) => Promise<void>;
   onForceResetIron: () => Promise<void>;
   onDeleteHistory: (historyId: string) => Promise<void>;
+  onDeleteAllHistory: () => Promise<void>;
 }
 
 function escapeCsvCell(value: string | null | undefined): string {
@@ -39,13 +42,17 @@ export default function AdminDashboardModal({
   ironStatus,
   waitlist,
   history,
+  activePin: serverActivePin = null,
+  waitlistPins = {},
   onClose,
   onForceCancelWaitlist,
   onForceResetIron,
   onDeleteHistory,
+  onDeleteAllHistory,
 }: AdminDashboardModalProps) {
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -70,7 +77,12 @@ export default function AdminDashboardModal({
 
   if (!isOpen) return null;
 
-  const { displayRoom } = parseRoomMeta(ironStatus.current_room);
+  const { displayRoom, pin: legacyActivePin } = parseRoomMeta(
+    ironStatus.current_room
+  );
+  const activePin = serverActivePin ?? legacyActivePin;
+  const isCurrentlyBorrowed =
+    !ironStatus.is_available && ironStatus.current_borrower !== "PERBAIKAN";
   const statusLabel = ironStatus.is_available
     ? `Tersedia (Lokasi: ${displayRoom})`
     : ironStatus.current_borrower === "PERBAIKAN"
@@ -116,6 +128,24 @@ export default function AdminDashboardModal({
       );
     } finally {
       setBusyActionId(null);
+    }
+  }
+
+  async function handleDeleteAllRecords() {
+    if (!window.confirm("Yakin ingin menghapus seluruh riwayat?")) {
+      return;
+    }
+
+    setIsDeletingAll(true);
+    setErrorMsg(null);
+    try {
+      await onDeleteAllHistory();
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Gagal menghapus seluruh riwayat."
+      );
+    } finally {
+      setIsDeletingAll(false);
     }
   }
 
@@ -247,7 +277,13 @@ export default function AdminDashboardModal({
                 <p className="mt-1 text-sm font-extrabold text-slate-900">
                   {statusLabel}
                 </p>
-                <p className="text-xs font-medium text-slate-500">
+                {isCurrentlyBorrowed && (
+                  <p className="mt-1 inline-block rounded-xl bg-white px-3 py-1 text-xs font-extrabold text-[#6944D8] shadow-2xs">
+                    Dipinjam oleh: {ironStatus.current_borrower || "-"} | PIN
+                    Aktif: {activePin ?? "-"}
+                  </p>
+                )}
+                <p className="mt-1 text-xs font-medium text-slate-500">
                   Reset paksa status ke Tersedia dan lokasi menjadi tanda strip (-).
                 </p>
               </div>
@@ -282,6 +318,7 @@ export default function AdminDashboardModal({
               <ul className="mt-3 space-y-2">
                 {waitlist.map((person, index) => {
                   const meta = parseRoomMeta(person.room_number);
+                  const personPin = waitlistPins[String(person.id)] ?? meta.pin;
                   const isBusy = busyActionId === person.id;
                   return (
                     <li
@@ -294,7 +331,7 @@ export default function AdminDashboardModal({
                         </p>
                         <p className="text-xs font-semibold text-slate-500">
                           Kamar {meta.displayRoom}
-                          {meta.pin ? ` • PIN: ${meta.pin}` : ""}
+                          {personPin ? ` • PIN: ${personPin}` : ""}
                         </p>
                       </div>
                       <button
@@ -314,16 +351,28 @@ export default function AdminDashboardModal({
 
           {/* 3. Manajemen Riwayat (Hapus Data) */}
           <section className="rounded-3xl bg-[#F4F7FB] p-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="flex items-center gap-2 text-sm font-extrabold text-slate-900">
                 <span className="rounded-xl bg-[#DCF5E7] p-1.5 text-emerald-600">
                   <History className="h-4 w-4" aria-hidden="true" />
                 </span>
                 Manajemen Riwayat ({history.length})
               </h3>
-              <span className="text-[11px] font-semibold text-slate-500">
-                Hapus permanen dari database
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-slate-500">
+                  Hapus permanen dari database
+                </span>
+                {history.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteAllRecords}
+                    disabled={isDeletingAll}
+                    className="rounded-full bg-rose-100 px-3 py-1 text-[11px] font-extrabold text-rose-700 transition-all duration-200 hover:bg-rose-600 hover:text-white active:scale-95 disabled:opacity-50"
+                  >
+                    {isDeletingAll ? "Menghapus..." : "Hapus Semua"}
+                  </button>
+                )}
+              </div>
             </div>
 
             {history.length === 0 ? (

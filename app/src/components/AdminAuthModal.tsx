@@ -2,13 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { ShieldCheck, X } from "lucide-react";
-
-const MASTER_PIN = "9999";
+import { verifyAdminPin } from "@/lib/ironService";
 
 interface AdminAuthModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (masterPin: string) => void;
 }
 
 export default function AdminAuthModal({
@@ -18,6 +17,7 @@ export default function AdminAuthModal({
 }: AdminAuthModalProps) {
   const [pinInput, setPinInput] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   function handleClose() {
     setPinInput("");
@@ -42,14 +42,24 @@ export default function AdminAuthModal({
 
   if (!isOpen) return null;
 
-  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (pinInput.trim() === MASTER_PIN) {
+    const cleanPin = pinInput.trim();
+    if (!cleanPin) return;
+
+    setIsVerifying(true);
+    setErrorMsg(null);
+    try {
+      await verifyAdminPin(cleanPin);
       setPinInput("");
       setErrorMsg(null);
-      onSuccess();
-    } else {
-      setErrorMsg("Master PIN tidak sesuai.");
+      onSuccess(cleanPin);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Master PIN tidak sesuai."
+      );
+    } finally {
+      setIsVerifying(false);
     }
   }
 
@@ -139,9 +149,10 @@ export default function AdminAuthModal({
             </button>
             <button
               type="submit"
-              className="min-h-11 flex-1 rounded-full bg-[#16181E] px-3 py-2.5 text-xs font-extrabold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 active:scale-95"
+              disabled={isVerifying}
+              className="min-h-11 flex-1 rounded-full bg-[#16181E] px-3 py-2.5 text-xs font-extrabold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 active:scale-95 disabled:opacity-60"
             >
-              Masuk
+              {isVerifying ? "Memeriksa..." : "Masuk"}
             </button>
           </div>
         </form>
